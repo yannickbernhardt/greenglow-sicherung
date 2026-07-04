@@ -10,8 +10,6 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;min-height:100%;background:#0c1310;color:#f1eede;font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
@@ -32,25 +30,10 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 /* ========== CONFIG ========== */
-const firebaseConfig = {
-  apiKey: "AIzaSyC-BuL-12k5VyU9AGrKMd-ffTs-KtcUnbI",
-  authDomain: "greenglow-sicherung.firebaseapp.com",
-  databaseURL: "https://greenglow-sicherung-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "greenglow-sicherung",
-  storageBucket: "greenglow-sicherung.firebasestorage.app",
-  messagingSenderId: "779631135832",
-  appId: "1:779631135832:web:247c3f4e79d8bb34030e2d"
-};
-
-const SESSION_ID = 'hbg11a-abu';
+const TOPIC = 'greenglow-sich-hbg11a-r7k3n';
+const NTFY = 'https://ntfy.sh/' + TOPIC;
 const TEACHER_PW = 'engpass';
-
-let db, initErr;
-try {
-  if (firebaseConfig.apiKey === 'REPLACE_ME') throw new Error('Firebase-Config noch nicht eingetragen');
-  firebase.initializeApp(firebaseConfig);
-  db = firebase.database();
-} catch(e) { initErr = e; }
+let initErr = null;
 
 /* ========== DATA ========== */
 const STATIONS = [
@@ -147,14 +130,17 @@ function StudentApp() {
   const submit = async () => {
     setSubmitting(true); setError(null);
     try {
-      const teamId = state.teamId || db.ref('sessions/'+SESSION_ID+'/submissions').push().key;
-      await db.ref('sessions/'+SESSION_ID+'/submissions/'+teamId).set({
+      const teamId = state.teamId || Math.random().toString(36).slice(2, 10);
+      const payload = {
+        teamId,
         teamName: state.teamName.trim(),
         ratings: state.ratings,
         interfaces: state.interfaces,
         optimization: state.optimization.trim(),
-        timestamp: firebase.database.ServerValue.TIMESTAMP
-      });
+        timestamp: Date.now()
+      };
+      const res = await fetch(NTFY, { method:'POST', body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       setState(s => ({ ...s, teamId, submitted:true }));
       setStep(4);
       window.scrollTo({top:0, behavior:'smooth'});
@@ -343,12 +329,41 @@ function TeacherView({route}) {
 
   useEffect(() => {
     if (!authed) return;
-    const ref = db.ref('sessions/'+SESSION_ID+'/submissions');
-    const cb = ref.on('value', snap => {
-      setData(snap.val() || {});
-      setLoading(false);
-    });
-    return () => ref.off('value', cb);
+    const clearedBefore = parseInt(localStorage.getItem('teacher_cleared_before') || '0', 10);
+    const buffer = new Map();
+    const process = (payloadStr) => {
+      try {
+        const p = JSON.parse(payloadStr);
+        if (p.timestamp < clearedBefore) return;
+        const existing = buffer.get(p.teamId);
+        if (!existing || existing.timestamp < p.timestamp) buffer.set(p.teamId, p);
+        const obj = {};
+        buffer.forEach((v, k) => obj[k] = v);
+        setData(obj);
+      } catch(e) {}
+    };
+    // History-Fetch
+    fetch(NTFY + '/json?poll=1&since=all')
+      .then(r => r.text())
+      .then(text => {
+        text.split('\n').filter(l => l.trim()).forEach(line => {
+          try {
+            const m = JSON.parse(line);
+            if (m.event === 'message' && m.message) process(m.message);
+          } catch(e) {}
+        });
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+    // Live-Subscribe via SSE
+    const es = new EventSource(NTFY + '/sse');
+    es.onmessage = ev => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.event === 'message' && m.message) process(m.message);
+      } catch(e) {}
+    };
+    return () => es.close();
   }, [authed]);
 
   if (!authed) return <TeacherLogin password={password} setPassword={setPassword} onLogin={() => setAuthed(password === TEACHER_PW)}/>;
@@ -357,9 +372,10 @@ function TeacherView({route}) {
   submissions.sort((a,b) => (a.timestamp||0) - (b.timestamp||0));
 
   return <div style={{maxWidth:1400, margin:'0 auto', padding:'24px 24px 64px'}}>
-    <TeacherHeader count={submissions.length} onReset={async () => {
-      if (confirm('Wirklich alle '+submissions.length+' Eingaben löschen? Kann nicht rückgängig gemacht werden.')) {
-        await db.ref('sessions/'+SESSION_ID+'/submissions').remove();
+    <TeacherHeader count={submissions.length} onReset={() => {
+      if (confirm('Alle bisherigen Eingaben ausblenden? (Zurücksetzen des Klassen-Dashboards für die nächste Runde.)')) {
+        localStorage.setItem('teacher_cleared_before', String(Date.now()));
+        setData({});
       }
     }}/>
     {loading && <Msg>Lade …</Msg>}
