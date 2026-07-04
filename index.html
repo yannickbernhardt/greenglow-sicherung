@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sicherung · GreenGlow Ablauforganisation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;min-height:100%;background:#0c1310;color:#f1eede;font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{background:linear-gradient(135deg,#0c1310 0%,#0e1a15 100%);min-height:100vh}
+  input,textarea,button,select{font-family:inherit;color:inherit}
+  input:focus,textarea:focus,select:focus{outline:2px solid rgba(93,201,138,.5);outline-offset:2px}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:8px}
+  details summary{list-style:none}
+  details summary::-webkit-details-marker{display:none}
+  @keyframes gg-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes gg-pop{from{transform:scale(.8);opacity:0}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/jsx-app" id="app-src">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+/* ========== CONFIG ========== */
+const firebaseConfig = {
+  apiKey: "REPLACE_ME",
+  authDomain: "REPLACE_ME.firebaseapp.com",
+  databaseURL: "https://REPLACE_ME-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "REPLACE_ME",
+  storageBucket: "REPLACE_ME.appspot.com",
+  messagingSenderId: "REPLACE_ME",
+  appId: "REPLACE_ME"
+};
+
+const SESSION_ID = 'hbg11a-abu';
+const TEACHER_PW = 'engpass';
+
+let db, initErr;
+try {
+  if (firebaseConfig.apiKey === 'REPLACE_ME') throw new Error('Firebase-Config noch nicht eingetragen');
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+} catch(e) { initErr = e; }
+
+/* ========== DATA ========== */
+const STATIONS = [
+  { num:1, name:"Bestelleingang", dept:"Vertrieb & Kundenservice" },
+  { num:2, name:"Bestand prüfen", dept:"Einkauf & Logistik" },
+  { num:3, name:"Vorrätig? (Verzweigung)", dept:"Einkauf & Logistik" },
+  { num:4, name:"Rechnung & Kommissionierung", dept:"Finanzen + Logistik" },
+  { num:5, name:"Qualität & Verpacken", dept:"Produktion + Logistik" },
+  { num:6, name:"Versand", dept:"Einkauf & Logistik" },
+  { num:7, name:"Beim Kunden", dept:"Vertrieb & Kundenservice" }
+];
+
+const PAIRS = [
+  { id:'p12', from:1, to:2, note:'Vertrieb → Logistik', critical:true },
+  { id:'p23', from:2, to:3, note:'innerhalb Logistik', critical:false },
+  { id:'p34', from:3, to:4, note:'Logistik → Finanzen', critical:true },
+  { id:'p45', from:4, to:5, note:'Finanzen → Produktion', critical:true },
+  { id:'p56', from:5, to:6, note:'zurück in Logistik', critical:false },
+  { id:'p67', from:6, to:7, note:'Logistik → Vertrieb', critical:true }
+];
+
+const RC = { 1:'#66BB6A', 2:'#F0B75B', 3:'#E86A5E' };
+
+/* ========== ICONS ========== */
+const Svg = ({size=20, sw=2, children}) =>
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
+const CheckIcon = p => <Svg {...p}><path d="M20 6L9 17l-5-5"/></Svg>;
+const ArrowIcon = p => <Svg {...p}><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></Svg>;
+const BackIcon = p => <Svg {...p}><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></Svg>;
+const SendIcon = p => <Svg {...p}><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></Svg>;
+const RefreshIcon = p => <Svg {...p}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></Svg>;
+const AlertIcon = p => <Svg {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></Svg>;
+const UsersIcon = p => <Svg {...p}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></Svg>;
+
+/* ========== ROUTING ========== */
+function getRoute() {
+  const h = window.location.hash.slice(1);
+  const [path, qs] = h.split('?');
+  return { path: path || '', params: new URLSearchParams(qs || '') };
+}
+
+/* ========== APP ========== */
+function App() {
+  const [route, setRoute] = useState(getRoute());
+  useEffect(() => {
+    const h = () => setRoute(getRoute());
+    window.addEventListener('hashchange', h);
+    return () => window.removeEventListener('hashchange', h);
+  }, []);
+  if (initErr) return <ConfigError err={initErr}/>;
+  if (route.path === 'lehrer') return <TeacherView route={route}/>;
+  return <StudentApp/>;
+}
+
+function ConfigError({err}) {
+  return <div style={{maxWidth:520, margin:'80px auto', padding:32, background:'#141d18', borderRadius:16, border:'1px solid rgba(255,255,255,.08)'}}>
+    <div style={{color:'#E86A5E', marginBottom:12, display:'flex', gap:10, alignItems:'center'}}>
+      <AlertIcon/><span style={{fontSize:16, fontWeight:600}}>Firebase noch nicht konfiguriert</span>
+    </div>
+    <p style={{color:'rgba(241,238,222,.7)', fontSize:14, lineHeight:1.6, margin:0}}>
+      Die Firebase-Config muss noch in die HTML-Datei eingetragen werden. Sobald sie da ist, funktioniert das Tool sofort.
+    </p>
+    {err && <pre style={{marginTop:16, padding:12, background:'rgba(0,0,0,.4)', borderRadius:8, fontSize:11, color:'#E86A5E', whiteSpace:'pre-wrap', overflow:'auto'}}>{String(err.message||err)}</pre>}
+  </div>;
+}
+
+/* ========== STUDENT APP ========== */
+function defaultState() {
+  return { teamName:'', ratings:{}, interfaces:[{pairId:'',reason:''},{pairId:'',reason:''}], optimization:'', submitted:false, teamId:null };
+}
+function validate(s, step) {
+  if (step === 0) return s.teamName.trim().length >= 2;
+  if (step === 1) return STATIONS.every(st => s.ratings[st.num] >= 1 && s.ratings[st.num] <= 3);
+  if (step === 2) return s.interfaces[0].pairId && s.interfaces[0].reason.trim().length >= 3
+                     && s.interfaces[1].pairId && s.interfaces[1].reason.trim().length >= 3
+                     && s.interfaces[0].pairId !== s.interfaces[1].pairId;
+  if (step === 3) return s.optimization.trim().length >= 10;
+  return false;
+}
+
+function StudentApp() {
+  const [state, setState] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('gg_sich') || 'null') || defaultState(); }
+    catch { return defaultState(); }
+  });
+  const [step, setStep] = useState(state.submitted ? 4 : 0);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { localStorage.setItem('gg_sich', JSON.stringify(state)); }, [state]);
+
+  const update = patch => setState(s => ({ ...s, ...patch }));
+
+  const submit = async () => {
+    setSubmitting(true); setError(null);
+    try {
+      const teamId = state.teamId || db.ref('sessions/'+SESSION_ID+'/submissions').push().key;
+      await db.ref('sessions/'+SESSION_ID+'/submissions/'+teamId).set({
+        teamName: state.teamName.trim(),
+        ratings: state.ratings,
+        interfaces: state.interfaces,
+        optimization: state.optimization.trim(),
+        timestamp: firebase.database.ServerValue.TIMESTAMP
+      });
+      setState(s => ({ ...s, teamId, submitted:true }));
+      setStep(4);
+      window.scrollTo({top:0, behavior:'smooth'});
+    } catch(e) { setError(e.message || String(e)); }
+    setSubmitting(false);
+  };
+
+  const restart = () => {
+    localStorage.removeItem('gg_sich');
+    setState(defaultState()); setStep(0);
+  };
+
+  const canProceed = validate(state, step);
+
+  return <div style={{maxWidth:640, margin:'0 auto', padding:'24px 20px 120px'}}>
+    <TopBar step={step} teamName={state.teamName}/>
+    {step < 4 && <StepIndicator step={step}/>}
+    <div style={{marginTop:20, animation:'gg-rise .3s ease'}} key={step}>
+      {step === 0 && <TeamStep name={state.teamName} onChange={n => update({teamName:n})}/>}
+      {step === 1 && <RatingStep ratings={state.ratings} onChange={r => update({ratings:r})}/>}
+      {step === 2 && <InterfacesStep values={state.interfaces} onChange={i => update({interfaces:i})}/>}
+      {step === 3 && <OptStep value={state.optimization} onChange={v => update({optimization:v})}/>}
+      {step === 4 && <SuccessScreen teamName={state.teamName} onRestart={restart}/>}
+    </div>
+    {step < 4 && <NavBar step={step} canProceed={canProceed} submitting={submitting} error={error}
+      onBack={() => setStep(s => Math.max(0, s-1))}
+      onNext={() => { setStep(s => s+1); window.scrollTo({top:0, behavior:'smooth'}); }}
+      onSubmit={submit}/>}
+  </div>;
+}
+
+function TopBar({step, teamName}) {
+  return <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', paddingBottom:8, gap:12}}>
+    <div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif", fontSize:26, fontWeight:700, color:'#f1eede', lineHeight:1.1}}>
+        Sicherung <span style={{color:'#5DC98A'}}>·</span> GreenGlow
+      </div>
+      <div style={{fontSize:11, letterSpacing:'.14em', textTransform:'uppercase', color:'rgba(241,238,222,.5)', marginTop:2}}>Ablauforganisation</div>
+    </div>
+    {teamName && step > 0 && step < 4 && <div style={{fontSize:12, color:'rgba(241,238,222,.6)', textAlign:'right', flexShrink:0}}>
+      <div style={{textTransform:'uppercase', letterSpacing:'.1em', fontSize:9.5}}>Team</div>
+      <div style={{fontWeight:600, color:'#f1eede', marginTop:2, fontSize:13, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{teamName}</div>
+    </div>}
+  </div>;
+}
+
+function StepIndicator({step}) {
+  return <div style={{display:'flex', gap:6, marginTop:24}}>
+    {[0,1,2,3].map(i => <div key={i} style={{flex:1, height:4, borderRadius:2, background: i <= step ? '#5DC98A' : 'rgba(255,255,255,.1)', transition:'background .3s'}}/>)}
+  </div>;
+}
+
+function TeamStep({name, onChange}) {
+  return <Card>
+    <H1>Willkommen 👋</H1>
+    <P>Bevor's losgeht — wie heißt euer Team? Wenn du allein arbeitest, trag einfach deinen Namen ein.</P>
+    <input type="text" value={name} onChange={e => onChange(e.target.value)} placeholder="z. B. Team Alpha oder Yannick" autoFocus maxLength={40}
+      style={{width:'100%', padding:'14px 16px', fontSize:16, background:'rgba(255,255,255,.06)', border:'1px solid rgba(255,255,255,.14)', borderRadius:12, marginTop:12, color:'#f1eede'}}/>
+    <Hint>Es geht anonym — kein Konto, kein Login. Nur der Team-Name ist für dich und die Klasse sichtbar.</Hint>
+  </Card>;
+}
+
+function RatingStep({ratings, onChange}) {
+  const set = (num, val) => onChange({ ...ratings, [num]:val });
+  const filled = STATIONS.filter(s => ratings[s.num] >= 1).length;
+  return <Card>
+    <H1>Aufgabe 1 · Bewertet die Stationen</H1>
+    <P>Vergebt für jede Station 1–3 Punkte: <b style={{color:RC[1]}}>1 = unkritisch</b>, <b style={{color:RC[2]}}>2 = aufpassen</b>, <b style={{color:RC[3]}}>3 = hochriskant</b>.</P>
+    <div style={{marginTop:14, fontSize:12, color:'rgba(241,238,222,.55)', display:'flex', justifyContent:'space-between'}}>
+      <span>{filled} / 7 bewertet</span>
+      {filled === 7 && <span style={{color:'#5DC98A', display:'flex', alignItems:'center', gap:4}}><CheckIcon size={12}/> vollständig</span>}
+    </div>
+    <div style={{marginTop:14, display:'flex', flexDirection:'column', gap:10}}>
+      {STATIONS.map(st =>
+        <div key={st.num} style={{padding:14, borderRadius:12, background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.08)'}}>
+          <div style={{display:'flex', alignItems:'flex-start', gap:12}}>
+            <span style={{flexShrink:0, width:26, height:26, borderRadius:6, background:'rgba(93,201,138,.14)', color:'#5DC98A', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12}}>{st.num}</span>
+            <div style={{flex:1, minWidth:0}}>
+              <div style={{fontWeight:600, fontSize:14, color:'#f1eede'}}>{st.name}</div>
+              <div style={{fontSize:11, color:'rgba(241,238,222,.5)', marginTop:2}}>{st.dept}</div>
+            </div>
+          </div>
+          <div style={{display:'flex', gap:8, marginTop:12}}>
+            {[1,2,3].map(v => {
+              const active = ratings[st.num] === v;
+              return <button key={v} onClick={() => set(st.num, v)} style={{
+                flex:1, padding:'12px 0', borderRadius:10, cursor:'pointer', fontWeight:700, fontSize:16,
+                border: active ? `2px solid ${RC[v]}` : '1px solid rgba(255,255,255,.12)',
+                background: active ? RC[v]+'22' : 'transparent',
+                color: active ? RC[v] : 'rgba(241,238,222,.7)',
+                transition:'all .18s'
+              }}>{v}</button>;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  </Card>;
+}
+
+function InterfacesStep({values, onChange}) {
+  const set = (i, patch) => onChange(values.map((v, j) => i === j ? { ...v, ...patch } : v));
+  return <Card>
+    <H1>Aufgabe 2 · Die zwei kritischsten Schnittstellen</H1>
+    <P>Wählt aus dem Prozess die zwei Übergänge, an denen es am ehesten schiefgehen kann. Meist sind das Wechsel zwischen zwei Abteilungen.</P>
+    {[0, 1].map(i =>
+      <div key={i} style={{marginTop:16, padding:16, borderRadius:12, background:'rgba(232,162,61,.08)', border:'1px solid rgba(232,162,61,.22)'}}>
+        <div style={{fontWeight:700, fontSize:11, color:'#F0B75B', marginBottom:10, letterSpacing:'.08em', textTransform:'uppercase'}}>Schnittstelle {i+1}</div>
+        <select value={values[i].pairId} onChange={e => set(i, {pairId:e.target.value})}
+          style={{width:'100%', padding:'12px 14px', fontSize:14, background:'#1a231d', border:'1px solid rgba(255,255,255,.14)', borderRadius:10, color:'#f1eede', marginBottom:12, cursor:'pointer'}}>
+          <option value="">– Übergang wählen –</option>
+          {PAIRS.filter(p => i === 1 ? p.id !== values[0].pairId : true).map(p =>
+            <option key={p.id} value={p.id}>Zwischen Station {p.from} und {p.to} · {p.note}</option>
+          )}
+        </select>
+        <textarea value={values[i].reason} onChange={e => set(i, {reason:e.target.value})} rows={3} placeholder="Warum ist gerade dieser Übergang kritisch?"
+          style={{width:'100%', padding:'12px 14px', fontSize:14, background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.12)', borderRadius:10, color:'#f1eede', resize:'vertical', lineHeight:1.5}}/>
+      </div>
+    )}
+  </Card>;
+}
+
+function OptStep({value, onChange}) {
+  return <Card>
+    <H1>Aufgabe 3 · Euer Optimierungsvorschlag</H1>
+    <P>Was würdet ihr Manuela konkret empfehlen, um eine dieser Schnittstellen zu entschärfen? Möglichst konkret — wer soll was tun?</P>
+    <textarea value={value} onChange={e => onChange(e.target.value)} rows={6} placeholder="Beispiel: Bei GreenGlow sollte Yusuf am Ende jedes Tages eine kurze Übergabe-Notiz an Hannah senden, damit …"
+      style={{width:'100%', padding:'14px 16px', fontSize:15, background:'rgba(255,255,255,.06)', border:'1px solid rgba(255,255,255,.14)', borderRadius:12, color:'#f1eede', resize:'vertical', lineHeight:1.55, marginTop:12}}/>
+    <Hint>Tipp: „Wer? Was? Wann?" — konkrete Vorschläge sind stärker als vage Absichten.</Hint>
+  </Card>;
+}
+
+function SuccessScreen({teamName, onRestart}) {
+  return <Card>
+    <div style={{textAlign:'center', padding:'12px 0 4px'}}>
+      <div style={{width:78, height:78, margin:'0 auto', borderRadius:'50%', background:'rgba(93,201,138,.15)', display:'flex', alignItems:'center', justifyContent:'center', color:'#5DC98A', animation:'gg-pop .35s cubic-bezier(.2,.8,.2,1)'}}>
+        <CheckIcon size={42} sw={2.6}/>
+      </div>
+      <H1 style={{marginTop:20, textAlign:'center'}}>Danke, {teamName}! 🎉</H1>
+      <P style={{textAlign:'center'}}>Eure Ergebnisse sind an der Tafel angekommen und werden gleich in der Klasse besprochen.</P>
+    </div>
+    <button onClick={onRestart} style={{...btnStyle('secondary'), width:'100%', marginTop:24}}>
+      <RefreshIcon size={16}/> Neu starten (falls doppelt eingegeben)
+    </button>
+  </Card>;
+}
+
+function NavBar({step, canProceed, submitting, error, onBack, onNext, onSubmit}) {
+  return <div style={{position:'fixed', bottom:0, left:0, right:0, background:'linear-gradient(to top, #0c1310 60%, transparent)', padding:'24px 20px 24px', zIndex:10, pointerEvents:'none'}}>
+    <div style={{maxWidth:640, margin:'0 auto', display:'flex', gap:10, pointerEvents:'auto'}}>
+      {step > 0 && <button onClick={onBack} style={btnStyle('secondary')}><BackIcon size={16}/> Zurück</button>}
+      {step < 3 && <button onClick={onNext} disabled={!canProceed} style={{...btnStyle('primary'), flex:1, opacity:canProceed?1:.4, cursor:canProceed?'pointer':'not-allowed'}}>
+        Weiter <ArrowIcon size={16}/>
+      </button>}
+      {step === 3 && <button onClick={onSubmit} disabled={!canProceed || submitting} style={{...btnStyle('primary'), flex:1, opacity:(canProceed && !submitting)?1:.4, cursor:(canProceed && !submitting)?'pointer':'not-allowed'}}>
+        {submitting ? 'Sende …' : <>Absenden <SendIcon size={16}/></>}
+      </button>}
+    </div>
+    {error && <div style={{maxWidth:640, margin:'12px auto 0', padding:10, background:'rgba(232,106,94,.14)', border:'1px solid rgba(232,106,94,.4)', borderRadius:10, color:'#E86A5E', fontSize:13, textAlign:'center', pointerEvents:'auto'}}>
+      Fehler: {error}
+    </div>}
+  </div>;
+}
+
+const Card = ({children}) => <div style={{padding:'26px 24px', background:'rgba(17,26,22,0.6)', border:'1px solid rgba(255,255,255,.06)', borderRadius:18, backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)'}}>{children}</div>;
+const H1 = ({children, style}) => <h1 style={{fontFamily:"'Cormorant Garamond',serif", fontWeight:700, fontSize:27, color:'#f1eede', margin:'0 0 10px', lineHeight:1.15, ...style}}>{children}</h1>;
+const P = ({children, style}) => <p style={{margin:0, fontSize:14, lineHeight:1.55, color:'rgba(241,238,222,.75)', ...style}}>{children}</p>;
+const Hint = ({children}) => <p style={{margin:'12px 0 0', fontSize:12, color:'rgba(241,238,222,.5)', fontStyle:'italic'}}>{children}</p>;
+
+const btnStyle = (variant) => variant === 'primary' ? {
+  display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'14px 22px', border:'none', borderRadius:12,
+  background:'linear-gradient(135deg,#2E7D32,#1B5E20)', color:'#f3f7f2', fontWeight:600, fontSize:15, cursor:'pointer',
+  boxShadow:'0 8px 22px rgba(27,94,32,.35)', transition:'opacity .18s'
+} : {
+  display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'14px 20px', border:'1px solid rgba(255,255,255,.14)', borderRadius:12,
+  background:'rgba(20,29,24,.8)', backdropFilter:'blur(6px)', color:'rgba(241,238,222,.85)', fontWeight:600, fontSize:14, cursor:'pointer'
+};
+
+/* ========== TEACHER VIEW ========== */
+function TeacherView({route}) {
+  const urlPw = route.params.get('pw') || '';
+  const [password, setPassword] = useState(urlPw);
+  const [authed, setAuthed] = useState(urlPw === TEACHER_PW);
+  const [data, setData] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!authed) return;
+    const ref = db.ref('sessions/'+SESSION_ID+'/submissions');
+    const cb = ref.on('value', snap => {
+      setData(snap.val() || {});
+      setLoading(false);
+    });
+    return () => ref.off('value', cb);
+  }, [authed]);
+
+  if (!authed) return <TeacherLogin password={password} setPassword={setPassword} onLogin={() => setAuthed(password === TEACHER_PW)}/>;
+
+  const submissions = Object.entries(data).map(([id, d]) => ({id, ...d}));
+  submissions.sort((a,b) => (a.timestamp||0) - (b.timestamp||0));
+
+  return <div style={{maxWidth:1400, margin:'0 auto', padding:'24px 24px 64px'}}>
+    <TeacherHeader count={submissions.length} onReset={async () => {
+      if (confirm('Wirklich alle '+submissions.length+' Eingaben löschen? Kann nicht rückgängig gemacht werden.')) {
+        await db.ref('sessions/'+SESSION_ID+'/submissions').remove();
+      }
+    }}/>
+    {loading && <Msg>Lade …</Msg>}
+    {!loading && submissions.length === 0 && <Msg>Noch keine Eingaben. Sobald die SuS absenden, erscheinen sie hier live.</Msg>}
+    {!loading && submissions.length > 0 && <>
+      <RatingsPanel submissions={submissions}/>
+      <InterfacesPanel submissions={submissions}/>
+      <OptimizationsPanel submissions={submissions}/>
+    </>}
+  </div>;
+}
+
+const Msg = ({children}) => <div style={{textAlign:'center', padding:80, color:'rgba(241,238,222,.55)', fontSize:15}}>{children}</div>;
+
+function TeacherLogin({password, setPassword, onLogin}) {
+  return <div style={{maxWidth:400, margin:'80px auto', padding:32, background:'#141d18', borderRadius:16, border:'1px solid rgba(255,255,255,.08)'}}>
+    <H1>Lehrer-Ansicht</H1>
+    <P>Passwort eingeben, um das Klassen-Dashboard zu öffnen.</P>
+    <input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && onLogin()} autoFocus placeholder="Passwort"
+      style={{width:'100%', padding:'12px 14px', fontSize:15, background:'rgba(255,255,255,.06)', border:'1px solid rgba(255,255,255,.14)', borderRadius:10, color:'#f1eede', marginTop:14}}/>
+    <button onClick={onLogin} style={{...btnStyle('primary'), width:'100%', marginTop:14}}>Öffnen</button>
+  </div>;
+}
+
+function TeacherHeader({count, onReset}) {
+  return <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:16, marginBottom:24}}>
+    <div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif", fontSize:34, fontWeight:700}}>Klassen-Auswertung <span style={{color:'#5DC98A'}}>·</span> GreenGlow</div>
+      <div style={{fontSize:12, letterSpacing:'.14em', textTransform:'uppercase', color:'rgba(241,238,222,.5)', marginTop:4}}>Ablauforganisation · HBG 11A</div>
+    </div>
+    <div style={{display:'flex', gap:12, alignItems:'center'}}>
+      <div style={{padding:'10px 18px', borderRadius:12, background:'rgba(93,201,138,.14)', border:'1px solid rgba(93,201,138,.32)', display:'flex', alignItems:'center', gap:10}}>
+        <UsersIcon size={16}/>
+        <span style={{fontFamily:"'Cormorant Garamond',serif", fontSize:24, fontWeight:700, color:'#5DC98A'}}>{count}</span>
+        <span style={{fontSize:12, color:'rgba(241,238,222,.6)'}}>{count === 1 ? 'Team' : 'Teams'}</span>
+      </div>
+      <button onClick={onReset} style={{...btnStyle('secondary'), color:'rgba(232,106,94,.9)', borderColor:'rgba(232,106,94,.3)'}}>Alle löschen</button>
+    </div>
+  </div>;
+}
+
+const Panel = ({num, label, children}) => <div style={{padding:24, background:'rgba(17,26,22,.6)', borderRadius:18, border:'1px solid rgba(255,255,255,.06)', marginBottom:20}}>
+  <div style={{display:'flex', alignItems:'center', gap:14}}>
+    <span style={{fontFamily:"'Cormorant Garamond',serif", fontSize:44, fontWeight:700, color:'#5DC98A', opacity:.4, lineHeight:1}}>{num}</span>
+    <div style={{fontFamily:"'Cormorant Garamond',serif", fontSize:26, fontWeight:600}}>{label}</div>
+  </div>
+  {children}
+</div>;
+
+function RatingsPanel({submissions}) {
+  return <Panel num="1" label="Bewertung pro Station">
+    <div style={{display:'flex', flexDirection:'column', gap:10, marginTop:18}}>
+      {STATIONS.map(st => {
+        const counts = {1:0, 2:0, 3:0};
+        submissions.forEach(s => { const r = s.ratings && s.ratings[st.num]; if (r>=1 && r<=3) counts[r]++; });
+        const total = counts[1]+counts[2]+counts[3];
+        const avg = total > 0 ? ((counts[1]+counts[2]*2+counts[3]*3)/total) : null;
+        return <div key={st.num} style={{display:'grid', gridTemplateColumns:'40px 1fr 70px', alignItems:'center', gap:16, padding:'12px 14px', background:'rgba(255,255,255,.03)', borderRadius:10}}>
+          <span style={{width:34, height:34, borderRadius:8, background:'rgba(93,201,138,.14)', color:'#5DC98A', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:14}}>{st.num}</span>
+          <div>
+            <div style={{fontSize:14.5, fontWeight:600}}>{st.name}</div>
+            <div style={{marginTop:8, display:'flex', height:13, borderRadius:6, overflow:'hidden', background:'rgba(255,255,255,.04)'}}>
+              {[1,2,3].map(v => {
+                const pct = total ? (counts[v]/total*100) : 0;
+                return <div key={v} title={`${counts[v]}× ${v} Pkt`} style={{width:pct+'%', background:RC[v], transition:'width .3s'}}/>;
+              })}
+            </div>
+            <div style={{fontSize:11, color:'rgba(241,238,222,.55)', marginTop:5, display:'flex', gap:14}}>
+              <span style={{color:RC[1]}}>● {counts[1]}× 1</span>
+              <span style={{color:RC[2]}}>● {counts[2]}× 2</span>
+              <span style={{color:RC[3]}}>● {counts[3]}× 3</span>
+            </div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontFamily:"'Cormorant Garamond',serif", fontSize:26, fontWeight:700, color: avg === null ? 'rgba(241,238,222,.3)' : avg > 2 ? '#E86A5E' : avg > 1.5 ? '#F0B75B' : '#66BB6A', lineHeight:1}}>
+              {avg === null ? '—' : avg.toFixed(1)}
+            </div>
+            <div style={{fontSize:10, color:'rgba(241,238,222,.4)', marginTop:2, letterSpacing:'.06em', textTransform:'uppercase'}}>Ø-Wert</div>
+          </div>
+        </div>;
+      })}
+    </div>
+  </Panel>;
+}
+
+function InterfacesPanel({submissions}) {
+  const counts = {};
+  PAIRS.forEach(p => counts[p.id] = { pair:p, count:0, reasons:[] });
+  submissions.forEach(s => {
+    (s.interfaces || []).forEach(iface => {
+      if (iface.pairId && counts[iface.pairId]) {
+        counts[iface.pairId].count++;
+        if (iface.reason) counts[iface.pairId].reasons.push({ reason:iface.reason, team:s.teamName });
+      }
+    });
+  });
+  const maxCount = Math.max(1, ...Object.values(counts).map(c => c.count));
+  const sorted = Object.values(counts).sort((a,b) => b.count - a.count);
+
+  return <Panel num="2" label="Kritischste Schnittstellen (Klassenstimmen)">
+    <div style={{marginTop:18, display:'flex', flexDirection:'column', gap:8}}>
+      {sorted.map(({pair, count, reasons}) =>
+        <details key={pair.id} style={{padding:'14px 18px', background:'rgba(255,255,255,.03)', borderRadius:10, border: count > 0 ? '1px solid rgba(232,162,61,.28)' : '1px solid rgba(255,255,255,.05)'}}>
+          <summary style={{cursor: reasons.length ? 'pointer' : 'default', display:'flex', alignItems:'center', gap:14}}>
+            <span style={{fontFamily:"'Cormorant Garamond',serif", fontSize:28, fontWeight:700, minWidth:44, color: count > 0 ? '#F0B75B' : 'rgba(241,238,222,.28)', lineHeight:1}}>{count}</span>
+            <div style={{flex:1, minWidth:0}}>
+              <div style={{fontSize:14.5, fontWeight:600}}>Station {pair.from} → {pair.to}</div>
+              <div style={{fontSize:11, color:'rgba(241,238,222,.55)', marginTop:2}}>{pair.note}{pair.critical ? ' · Abteilungswechsel ⚠' : ''}</div>
+            </div>
+            <div style={{width:140, height:9, borderRadius:5, background:'rgba(255,255,255,.06)', overflow:'hidden'}}>
+              <div style={{width:(count/maxCount*100)+'%', height:'100%', background:'#F0B75B', transition:'width .3s'}}/>
+            </div>
+          </summary>
+          {reasons.length > 0 && <div style={{marginTop:12, paddingLeft:58, display:'flex', flexDirection:'column', gap:8}}>
+            {reasons.map((r, i) =>
+              <div key={i} style={{padding:'10px 14px', background:'rgba(232,162,61,.06)', borderLeft:'2px solid rgba(232,162,61,.4)', borderRadius:'0 8px 8px 0', fontSize:13, lineHeight:1.55}}>
+                <div style={{fontSize:10, color:'rgba(241,238,222,.5)', letterSpacing:'.08em', textTransform:'uppercase', marginBottom:4, fontWeight:600}}>{r.team}</div>
+                {r.reason}
+              </div>
+            )}
+          </div>}
+        </details>
+      )}
+    </div>
+  </Panel>;
+}
+
+function OptimizationsPanel({submissions}) {
+  const withOpt = submissions.filter(s => s.optimization && s.optimization.trim());
+  return <Panel num="3" label="Optimierungsvorschläge">
+    <div style={{marginTop:18, display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(320px, 1fr))', gap:14}}>
+      {withOpt.map(s =>
+        <div key={s.id} style={{padding:18, background:'linear-gradient(160deg, rgba(46,125,50,.14), rgba(46,125,50,.03))', border:'1px solid rgba(93,201,138,.22)', borderRadius:12}}>
+          <div style={{fontSize:10, color:'#5DC98A', letterSpacing:'.12em', textTransform:'uppercase', marginBottom:8, fontWeight:700}}>{s.teamName}</div>
+          <div style={{fontSize:13.5, lineHeight:1.55, color:'#f1eede', whiteSpace:'pre-wrap'}}>{s.optimization}</div>
+        </div>
+      )}
+      {withOpt.length === 0 && <div style={{gridColumn:'1 / -1', padding:24, textAlign:'center', color:'rgba(241,238,222,.4)', fontSize:13}}>Noch keine Vorschläge eingegangen.</div>}
+    </div>
+  </Panel>;
+}
+
+/* ========== MOUNT ========== */
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<script>
+(function() {
+  try {
+    var src = document.getElementById('app-src').textContent;
+    var out = Babel.transform(src, {presets:[['react',{runtime:'classic'}]]}).code;
+    var s = document.createElement('script');
+    s.textContent = out;
+    document.body.appendChild(s);
+  } catch(e) {
+    document.getElementById('root').innerHTML = '<pre style="color:#fff;padding:20px;font:13px monospace;white-space:pre-wrap">' + (e.stack || String(e)) + '</pre>';
+  }
+})();
+</script>
+</body>
+</html>
